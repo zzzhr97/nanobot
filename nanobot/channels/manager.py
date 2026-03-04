@@ -149,6 +149,19 @@ class ChannelManager:
             except ImportError as e:
                 logger.warning("Matrix channel not available: {}", e)
 
+        # Test arena channel
+        if self.config.channels.test_arena.enabled:
+            try:
+                from nanobot.channels.test_arena import TestChannel
+                self.channels["test_arena"] = TestChannel(
+                    self.config.channels.test_arena,
+                    self.bus,
+                    name="test_arena",
+                )
+                logger.info("Test arena channel enabled")
+            except ImportError as e:
+                logger.warning("Test arena channel not available: {}", e)
+
         self._validate_allow_from()
 
     def _validate_allow_from(self) -> None:

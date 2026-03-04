@@ -26,6 +26,17 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
+from nanobot.agent.hooks import (
+    AgentHook,
+    LLMRequestRecord,
+    LLMStep,
+    ToolCallRecord,
+    ToolResultRecord,
+    ToolStep,
+    TurnRecord,
+    TurnStartRecord,
+    run_hooks_async,
+)
 
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig
@@ -65,9 +76,11 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        hooks: list[AgentHook] | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
+        self._hooks = list(hooks) if hooks else []
         self.channels_config = channels_config
         self.provider = provider
         self.workspace = workspace
@@ -181,15 +194,28 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
-    ) -> tuple[str | None, list[str], list[dict]]:
-        """Run the agent iteration loop. Returns (final_content, tools_used, messages)."""
+        hook_context: dict[str, Any] | None = None,
+    ) -> tuple[str | None, list[str], list[dict], TurnRecord]:
+        """Run the agent iteration loop. Returns (final_content, tools_used, messages, turn_record)."""
         messages = initial_messages
+        ctx = dict(hook_context or {})
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        llm_steps: list[LLMStep] = []
+        tool_steps: list[ToolStep] = []
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            req_record = LLMRequestRecord(
+                iteration=iteration,
+                request_messages=list(messages),
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+            await run_hooks_async(self._hooks, "on_llm_request", req_record)
 
             response = await self.provider.chat(
                 messages=messages,
@@ -199,6 +225,21 @@ class AgentLoop:
                 max_tokens=self.max_tokens,
                 reasoning_effort=self.reasoning_effort,
             )
+
+            tool_calls_serialized = [
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                for tc in (response.tool_calls or [])
+            ]
+            llm_step = LLMStep(
+                iteration=iteration,
+                request_messages=list(messages),
+                response_content=response.content or "",
+                response_content_stripped=self._strip_think(response.content),
+                tool_calls=tool_calls_serialized,
+                reasoning_content=getattr(response, "reasoning_content", None),
+            )
+            llm_steps.append(llm_step)
+            await run_hooks_async(self._hooks, "on_llm_response", llm_step)
 
             if response.has_tool_calls:
                 if on_progress:
@@ -228,7 +269,30 @@ class AgentLoop:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
+                    tool_args = (tool_call.arguments[0] if isinstance(tool_call.arguments, list) else tool_call.arguments) or {}
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
+                    call_record = ToolCallRecord(
+                        iteration=iteration,
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        arguments=dict(tool_args),
+                    )
+                    await run_hooks_async(self._hooks, "on_tool_call", call_record)
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result_record = ToolResultRecord(
+                        iteration=iteration,
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        arguments=dict(tool_args),
+                        result=result,
+                    )
+                    await run_hooks_async(self._hooks, "on_tool_result", result_record)
+                    tool_steps.append(ToolStep(
+                        name=tool_call.name,
+                        arguments=dict(tool_args),
+                        result=result,
+                    ))
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -254,7 +318,20 @@ class AgentLoop:
                 "without completing the task. You can try breaking the task into smaller steps."
             )
 
-        return final_content, tools_used, messages
+        record = TurnRecord(
+            session_key=ctx.get("session_key", ""),
+            channel=ctx.get("channel", ""),
+            chat_id=ctx.get("chat_id", ""),
+            input=ctx.get("input", ""),
+            sender_id=ctx.get("sender_id", ""),
+            messages=messages,
+            llm_steps=llm_steps,
+            tool_steps=tool_steps,
+            output=final_content,
+            iterations=iteration,
+            tools_used=tools_used,
+        )
+        return final_content, tools_used, messages, record
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -306,8 +383,15 @@ class AgentLoop:
             except asyncio.CancelledError:
                 logger.info("Task cancelled for session {}", msg.session_key)
                 raise
-            except Exception:
+            except Exception as e:
                 logger.exception("Error processing message for session {}", msg.session_key)
+                await run_hooks_async(
+                    self._hooks,
+                    "on_error",
+                    msg.channel,
+                    msg.chat_id,
+                    str(e),
+                )
                 await self.bus.publish_outbound(OutboundMessage(
                     channel=msg.channel, chat_id=msg.chat_id,
                     content="Sorry, I encountered an error.",
@@ -347,7 +431,26 @@ class AgentLoop:
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(messages)
+            start_record = TurnStartRecord(
+                session_key=key,
+                channel=channel,
+                chat_id=chat_id,
+                input=msg.content or "",
+                sender_id=msg.sender_id,
+            )
+            await run_hooks_async(self._hooks, "on_turn_start", start_record)
+            hook_ctx = {
+                "session_key": key,
+                "channel": channel,
+                "chat_id": chat_id,
+                "input": msg.content or "",
+                "sender_id": msg.sender_id,
+            }
+            final_content, _, all_msgs, turn_record = await self._run_agent_loop(
+                messages,
+                hook_context=hook_ctx,
+            )
+            await run_hooks_async(self._hooks, "on_turn_end", turn_record)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             return OutboundMessage(channel=channel, chat_id=chat_id,
@@ -423,6 +526,21 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
         )
+        start_record = TurnStartRecord(
+            session_key=key,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            input=msg.content or "",
+            sender_id=msg.sender_id,
+        )
+        await run_hooks_async(self._hooks, "on_turn_start", start_record)
+        hook_ctx = {
+            "session_key": key,
+            "channel": msg.channel,
+            "chat_id": msg.chat_id,
+            "input": msg.content or "",
+            "sender_id": msg.sender_id,
+        }
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
@@ -432,9 +550,11 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
-        final_content, _, all_msgs = await self._run_agent_loop(
+        final_content, _, all_msgs, turn_record = await self._run_agent_loop(
             initial_messages, on_progress=on_progress or _bus_progress,
+            hook_context=hook_ctx,
         )
+        await run_hooks_async(self._hooks, "on_turn_end", turn_record)
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."

@@ -255,6 +255,7 @@ def gateway(
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     from nanobot.session.manager import SessionManager
+    from nanobot.agent.hooks import LogHook, JsonStorageHook
 
     if verbose:
         import logging
@@ -291,6 +292,10 @@ def gateway(
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        hooks=[
+            LogHook(level="DEBUG"),
+            JsonStorageHook(storage_dir="~/.nanobot/trace_logs"),
+        ],
     )
 
     # Set cron callback (needs agent)

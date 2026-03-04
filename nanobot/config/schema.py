@@ -200,6 +200,14 @@ class MatrixConfig(Base):
     group_allow_from: list[str] = Field(default_factory=list)
     allow_room_mentions: bool = False
 
+class TestChannelConfig(Base):
+    """测试用 channel 配置，连接本地测试服务进行交互。"""
+
+    enabled: bool = False
+    base_url: str = "http://localhost:9999"  # 本地测试服务 base URL
+    poll_timeout: int = 30  # 长轮询超时（秒）
+    allow_from: list[str] = Field(default_factory=list)  # 允许的 sender_id，["*"] 则全部允许
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -215,6 +223,9 @@ class ChannelsConfig(Base):
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
     matrix: MatrixConfig = Field(default_factory=MatrixConfig)
+    test_arena: TestChannelConfig = Field(
+        default_factory=lambda: TestChannelConfig(base_url="http://localhost:9998")
+    )
 
 
 class AgentDefaults(Base):
