@@ -77,6 +77,7 @@ class TurnRecord:
     chat_id: str
     input: str  # 用户本轮完整输入
     sender_id: str = ""
+    model: str = ""
 
     # 完整消息列表（本轮结束后的 messages，含 history + 本轮的 assistant/tool）
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -111,6 +112,8 @@ class TurnRecord:
             self.input,
             "sender_id":
             self.sender_id,
+            "model":
+            self.model,
             "llm_steps": [{
                 "iteration": s.iteration,
                 "request_message_count": len(s.request_messages),
@@ -215,9 +218,10 @@ class LogHook(AgentHook):
         if not self._log_turn:
             return
         self._log(
-            "turn_start session={} channel={} chat_id={} input={}",
+            "turn_start session={} channel={} sender_id={}, chat_id={} input={}",
             record.session_key,
             record.channel,
+            record.sender_id,
             record.chat_id,
             self._truncate(record.input),
         )
@@ -274,8 +278,10 @@ class LogHook(AgentHook):
         if not self._log_turn:
             return
         self._log(
-            "turn_end session={} iterations={} tools_used={} output_len={}",
+            "turn_end session={} sender_id={} chat_id={} iterations={} tools_used={} output_len={}",
             record.session_key,
+            record.sender_id,
+            record.chat_id,
             record.iterations,
             record.tools_used,
             len(record.output or ""),
@@ -289,7 +295,7 @@ class LogHook(AgentHook):
 
 
 class JsonStorageHook(AgentHook):
-    """将每轮完整记录以 JSON 写入文件的 Hook；按 sender/chat 分子目录存储。"""
+    """将每轮完整记录以 JSON 写入文件的 Hook；按 model/sender/chat 分子目录存储。"""
 
     def __init__(
         self,
@@ -311,11 +317,12 @@ class JsonStorageHook(AgentHook):
         self._ensure_ascii = ensure_ascii
 
     def _path_for_turn(self, record: TurnRecord) -> Path:
-        """按 sender/chat 分子目录：storage_dir / {sender_id} / {chat_id} / turn_{timestamp}.json"""
+        """按 model/sender/chat 分子目录：storage_dir / {model} / {sender_id} / {chat_id} / turn_{timestamp}.json"""
 
+        safe_model = (record.model or "unknown_model").replace("/", "_")
         safe_sender = (record.sender_id or "unknown_sender").replace("/", "_")
         safe_chat = (record.chat_id or "unknown_chat").replace("/", "_")
-        target_dir = self._dir / safe_sender / safe_chat
+        target_dir = self._dir / safe_model / safe_sender / safe_chat
         target_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_key = (record.session_key or "unknown").replace(":", "_")

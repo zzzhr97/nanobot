@@ -324,6 +324,7 @@ class AgentLoop:
             chat_id=ctx.get("chat_id", ""),
             input=ctx.get("input", ""),
             sender_id=ctx.get("sender_id", ""),
+            model=self.model,
             messages=messages,
             llm_steps=llm_steps,
             tool_steps=tool_steps,
