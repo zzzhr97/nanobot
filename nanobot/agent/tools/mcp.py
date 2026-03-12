@@ -14,12 +14,19 @@ from nanobot.agent.tools.registry import ToolRegistry
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as a nanobot Tool."""
 
-    def __init__(self, session, server_name: str, tool_def, tool_timeout: int = 30):
+    def __init__(self,
+                 session,
+                 server_name: str,
+                 tool_def,
+                 tool_timeout: int = 30):
         self._session = session
         self._original_name = tool_def.name
         self._name = f"mcp_{server_name}_{tool_def.name}"
         self._description = tool_def.description or tool_def.name
-        self._parameters = tool_def.inputSchema or {"type": "object", "properties": {}}
+        self._parameters = tool_def.inputSchema or {
+            "type": "object",
+            "properties": {}
+        }
         self._tool_timeout = tool_timeout
 
     @property
@@ -42,7 +49,8 @@ class MCPToolWrapper(Tool):
                 timeout=self._tool_timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning("MCP tool '{}' timed out after {}s", self._name, self._tool_timeout)
+            logger.warning("MCP tool '{}' timed out after {}s", self._name,
+                           self._tool_timeout)
             return f"(MCP tool call timed out after {self._tool_timeout}s)"
         parts = []
         for block in result.content:
@@ -53,9 +61,8 @@ class MCPToolWrapper(Tool):
         return "\n".join(parts) or "(no output)"
 
 
-async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
-) -> None:
+async def connect_mcp_servers(mcp_servers: dict, registry: ToolRegistry,
+                              stack: AsyncExitStack) -> None:
     """Connect to configured MCP servers and register their tools."""
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -63,10 +70,11 @@ async def connect_mcp_servers(
     for name, cfg in mcp_servers.items():
         try:
             if cfg.command:
-                params = StdioServerParameters(
-                    command=cfg.command, args=cfg.args, env=cfg.env or None
-                )
-                read, write = await stack.enter_async_context(stdio_client(params))
+                params = StdioServerParameters(command=cfg.command,
+                                               args=cfg.args,
+                                               env=cfg.env or None)
+                read, write = await stack.enter_async_context(
+                    stdio_client(params))
             elif cfg.url:
                 from mcp.client.streamable_http import streamable_http_client
                 # Always provide an explicit httpx client so MCP HTTP transport does not
@@ -76,24 +84,31 @@ async def connect_mcp_servers(
                         headers=cfg.headers or None,
                         follow_redirects=True,
                         timeout=None,
-                    )
-                )
+                        trust_env=cfg.trust_env or False,
+                    ))
                 read, write, _ = await stack.enter_async_context(
-                    streamable_http_client(cfg.url, http_client=http_client)
-                )
+                    streamable_http_client(cfg.url, http_client=http_client))
             else:
-                logger.warning("MCP server '{}': no command or url configured, skipping", name)
+                logger.warning(
+                    "MCP server '{}': no command or url configured, skipping",
+                    name)
                 continue
 
-            session = await stack.enter_async_context(ClientSession(read, write))
+            session = await stack.enter_async_context(
+                ClientSession(read, write))
             await session.initialize()
 
             tools = await session.list_tools()
             for tool_def in tools.tools:
-                wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
+                wrapper = MCPToolWrapper(session,
+                                         name,
+                                         tool_def,
+                                         tool_timeout=cfg.tool_timeout)
                 registry.register(wrapper)
-                logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
+                logger.debug("MCP: registered tool '{}' from server '{}'",
+                             wrapper.name, name)
 
-            logger.info("MCP server '{}': connected, {} tools registered", name, len(tools.tools))
+            logger.info("MCP server '{}': connected, {} tools registered",
+                        name, len(tools.tools))
         except Exception as e:
             logger.error("MCP server '{}': failed to connect: {}", name, e)
