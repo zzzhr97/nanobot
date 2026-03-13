@@ -47,3 +47,11 @@
 - Prioritize changes in `nanobot/agent/hooks.py`; hooks are actively used to record runtime traces.
 - Prioritize updates to tools/skills code paths (for example under `nanobot/agent/tools/` and `nanobot/skills/`).
 - Focus on `nanobot gateway` runtime behavior; other CLI commands are not a current priority.
+
+## Runtime Trace Conventions
+- `TurnRecord` should include `model` in addition to session/channel/chat/sender/input so traces are model-aware.
+- Agent loop should populate `TurnRecord.model` from the active runtime model (for example `self.model` in `nanobot/agent/loop.py`).
+- `LogHook` turn logs should include both `sender_id` and `chat_id` for start/end records to improve routing-level debugging.
+- `JsonStorageHook` should shard turn files by `model/sender/chat` directory layout:
+  `storage_dir/{model}/{sender_id}/{chat_id}/turn_{timestamp}_{session}.json`.
+- Path components in trace storage must be sanitized (for example replacing `/`) to avoid invalid paths.

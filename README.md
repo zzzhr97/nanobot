@@ -835,6 +835,7 @@ Add MCP servers to your `config.json`:
       },
       "my-remote-mcp": {
         "url": "https://example.com/mcp/",
+        "trustEnv": false,
         "headers": {
           "Authorization": "Bearer xxxxx"
         }
@@ -849,7 +850,7 @@ Two transport modes are supported:
 | Mode | Config | Example |
 |------|--------|---------|
 | **Stdio** | `command` + `args` | Local process via `npx` / `uvx` |
-| **HTTP** | `url` + `headers` (optional) | Remote endpoint (`https://mcp.example.com/sse`) |
+| **HTTP** | `url` + `headers` (optional) + `trustEnv` (optional, default `false`) | Remote endpoint (`https://mcp.example.com/sse`) |
 
 Use `toolTimeout` to override the default 30s per-call timeout for slow servers:
 

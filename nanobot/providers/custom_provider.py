@@ -146,13 +146,16 @@ class CustomProvider(LLMProvider):
                    tools: list[dict[str, Any]] | None = None,
                    model: str | None = None,
                    max_tokens: int = 4096,
-                   temperature: float = 0.7) -> LLMResponse:
+                   temperature: float = 0.7,
+                   reasoning_effort: str | None = None) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": model or self.default_model,
             "messages": self._sanitize_empty_content(messages),
             "max_tokens": max(1, max_tokens),
             "temperature": temperature,
         }
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
         if tools:
             tools_sanitized = _sanitize_tool_schema_for_bedrock(tools)
             # Bedrock-compatible gateways may accept only a minimal schema subset.

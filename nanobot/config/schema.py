@@ -321,6 +321,7 @@ class MCPServerConfig(Base):
     env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
     url: str = ""  # HTTP: streamable HTTP endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP: Custom HTTP Headers
+    trust_env: bool = False  # HTTP: Whether to trust system proxy env vars (HTTP_PROXY/HTTPS_PROXY/etc.)
     tool_timeout: int = 30  # Seconds before a tool call is cancelled
 
 
