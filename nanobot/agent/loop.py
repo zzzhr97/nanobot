@@ -325,6 +325,7 @@ class AgentLoop:
             input=ctx.get("input", ""),
             sender_id=ctx.get("sender_id", ""),
             model=self.model,
+            session_started_at=ctx.get("session_started_at", ""),
             messages=messages,
             llm_steps=llm_steps,
             tool_steps=tool_steps,
@@ -426,6 +427,7 @@ class AgentLoop:
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
+            session_started_at = session.created_at.strftime("%Y%m%d_%H%M%S")
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=self.memory_window)
             messages = self.context.build_messages(
@@ -442,6 +444,7 @@ class AgentLoop:
             await run_hooks_async(self._hooks, "on_turn_start", start_record)
             hook_ctx = {
                 "session_key": key,
+                "session_started_at": session_started_at,
                 "channel": channel,
                 "chat_id": chat_id,
                 "input": msg.content or "",
@@ -462,6 +465,7 @@ class AgentLoop:
 
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
+        session_started_at = session.created_at.strftime("%Y%m%d_%H%M%S")
 
         # Slash commands
         cmd = msg.content.strip().lower()
@@ -537,6 +541,7 @@ class AgentLoop:
         await run_hooks_async(self._hooks, "on_turn_start", start_record)
         hook_ctx = {
             "session_key": key,
+            "session_started_at": session_started_at,
             "channel": msg.channel,
             "chat_id": msg.chat_id,
             "input": msg.content or "",

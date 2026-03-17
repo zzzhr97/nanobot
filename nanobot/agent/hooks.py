@@ -78,6 +78,7 @@ class TurnRecord:
     input: str  # 用户本轮完整输入
     sender_id: str = ""
     model: str = ""
+    session_started_at: str = ""
 
     # 完整消息列表（本轮结束后的 messages，含 history + 本轮的 assistant/tool）
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -104,6 +105,8 @@ class TurnRecord:
         payload: dict[str, Any] = {
             "session_key":
             self.session_key,
+            "session_started_at":
+            self.session_started_at,
             "channel":
             self.channel,
             "chat_id":
@@ -316,15 +319,20 @@ class JsonStorageHook(AgentHook):
         self._indent = indent
         self._ensure_ascii = ensure_ascii
 
+    @staticmethod
+    def _format_dir_timestamp(ts: datetime | None) -> str:
+        return (ts or datetime.now()).strftime("%Y%m%d_%H%M%S")
+
     def _path_for_turn(self, record: TurnRecord) -> Path:
-        """按 model/sender/chat 分子目录：storage_dir / {model} / {sender_id} / {chat_id} / turn_{timestamp}.json"""
+        """按 model/sender/chat/session 分子目录存储 turn 文件。"""
 
         safe_model = (record.model or "unknown_model").replace("/", "_")
         safe_sender = (record.sender_id or "unknown_sender").replace("/", "_")
         safe_chat = (record.chat_id or "unknown_chat").replace("/", "_")
-        target_dir = self._dir / safe_model / safe_sender / safe_chat
+        session_started_at = record.session_started_at or self._format_dir_timestamp(None)
+        target_dir = self._dir / safe_model / safe_sender / safe_chat / session_started_at
         target_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = self._format_dir_timestamp(datetime.now())
         safe_key = (record.session_key or "unknown").replace(":", "_")
         name = self._pattern.format(timestamp=ts, session_key=safe_key)
         return target_dir / name

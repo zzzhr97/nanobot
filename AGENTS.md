@@ -55,3 +55,12 @@
 - `JsonStorageHook` should shard turn files by `model/sender/chat` directory layout:
   `storage_dir/{model}/{sender_id}/{chat_id}/turn_{timestamp}_{session}.json`.
 - Path components in trace storage must be sanitized (for example replacing `/`) to avoid invalid paths.
+
+## Prompt Assembly Notes
+- `test_arena` does not formulate a dedicated system prompt. `nanobot/channels/test_arena.py` only polls/sends messages; `nanobot/channels/manager.py` registers it as `TestChannel(..., name="test_arena")`.
+- Each new inbound message builds prompt state in `nanobot/agent/loop.py` via `AgentLoop._process_message()` -> `self.context.build_messages(...)`.
+- The system prompt is formulated in `nanobot/agent/context.py` by `ContextBuilder.build_system_prompt()`.
+- `build_system_prompt()` assembles, in order: `_get_identity()`, workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`), memory from `memory/MEMORY.md`, always-on skills, and the skills summary.
+- `ContextBuilder.build_messages()` prepends the system prompt as the first `{"role": "system"}` message, then appends session history and the current user message.
+- `Channel: test_arena` is not part of the system prompt. It is injected as runtime metadata in the current user message by `_build_runtime_context()`.
+- Within a single reply turn, tool-call iterations reuse the same initial system prompt; `_run_agent_loop()` keeps extending `messages` with assistant/tool entries instead of rebuilding the system prompt each iteration.
