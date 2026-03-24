@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+
+import httpx
 import json_repair
+from loguru import logger
 from openai import AsyncOpenAI
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 _BEDROCK_INT_MIN = -(2**31)
 _BEDROCK_INT_MAX = 2**31 - 1
+_MAX_ATTEMPTS = 16
 
 
 def _sanitize_tool_schema_for_bedrock(obj: Any) -> Any:
@@ -140,6 +145,87 @@ class CustomProvider(LLMProvider):
             api_key=api_key,
             base_url=api_base,
         )
+        self._max_attempts = _MAX_ATTEMPTS
+
+    @staticmethod
+    def _retry_delay_seconds(retry_index: int) -> int:
+        """Return delay seconds before the next retry (1-based retry index)."""
+        if retry_index <= 1:
+            return 1
+        if retry_index == 2:
+            return 4
+        if retry_index == 3:
+            return 16
+        if retry_index == 4:
+            return 64
+        if retry_index == 5:
+            return 128
+        if retry_index == 6:
+            return 256
+        return 512
+
+    @staticmethod
+    def _extract_status_code(error: Exception) -> int | None:
+        status = getattr(error, "status_code", None)
+        if isinstance(status, int):
+            return status
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+        return None
+
+    @classmethod
+    def _is_retryable_error(cls, error: Exception) -> bool:
+        status = cls._extract_status_code(error)
+        if status is not None:
+            if status in {408, 429} or status >= 500:
+                return True
+            if 400 <= status < 500:
+                return False
+
+        if isinstance(error, (httpx.TimeoutException, httpx.TransportError, TimeoutError, ConnectionError)):
+            return True
+
+        error_type = error.__class__.__name__.lower()
+        if "timeout" in error_type or "connection" in error_type:
+            return True
+
+        text = str(error).lower()
+        transient_markers = (
+            "timeout",
+            "timed out",
+            "rate limit",
+            "too many requests",
+            "temporarily unavailable",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "connection reset",
+            "connection refused",
+        )
+        return any(marker in text for marker in transient_markers)
+
+    async def _create_with_retry(self, kwargs: dict[str, Any]) -> Any:
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                return await self._client.chat.completions.create(**kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if attempt >= self._max_attempts or not self._is_retryable_error(error):
+                    raise
+                delay_s = self._retry_delay_seconds(attempt)
+                logger.warning(
+                    "Custom provider request failed (attempt {}/{}): {}. Retrying in {}s",
+                    attempt,
+                    self._max_attempts,
+                    repr(error),
+                    delay_s,
+                )
+                await asyncio.sleep(delay_s)
+
+        raise RuntimeError("unreachable")
 
     async def chat(self,
                    messages: list[dict[str, Any]],
@@ -178,8 +264,7 @@ class CustomProvider(LLMProvider):
                 tool_choice="auto",
             )
         try:
-            return self._parse(await
-                               self._client.chat.completions.create(**kwargs))
+            return self._parse(await self._create_with_retry(kwargs))
         except Exception as e:
             # Print full error payload to avoid outer-log truncation.
             print("[custom_provider] full exception:", repr(e))
