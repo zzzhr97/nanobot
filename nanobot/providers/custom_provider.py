@@ -206,10 +206,10 @@ class CustomProvider(LLMProvider):
         )
         return any(marker in text for marker in transient_markers)
 
-    async def _create_with_retry(self, kwargs: dict[str, Any]) -> Any:
+    async def _chat_with_retry(self, kwargs: dict[str, Any]) -> LLMResponse:
         for attempt in range(1, self._max_attempts + 1):
             try:
-                return await self._client.chat.completions.create(**kwargs)
+                response = await self._client.chat.completions.create(**kwargs)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -218,6 +218,22 @@ class CustomProvider(LLMProvider):
                 delay_s = self._retry_delay_seconds(attempt)
                 logger.warning(
                     "Custom provider request failed (attempt {}/{}): {}. Retrying in {}s",
+                    attempt,
+                    self._max_attempts,
+                    repr(error),
+                    delay_s,
+                )
+                await asyncio.sleep(delay_s)
+                continue
+
+            try:
+                return self._parse(response)
+            except Exception as error:
+                if attempt >= self._max_attempts:
+                    raise
+                delay_s = self._retry_delay_seconds(attempt)
+                logger.warning(
+                    "Custom provider response parse failed (attempt {}/{}): {}. Retrying in {}s",
                     attempt,
                     self._max_attempts,
                     repr(error),
@@ -264,7 +280,7 @@ class CustomProvider(LLMProvider):
                 tool_choice="auto",
             )
         try:
-            return self._parse(await self._create_with_retry(kwargs))
+            return await self._chat_with_retry(kwargs)
         except Exception as e:
             # Print full error payload to avoid outer-log truncation.
             print("[custom_provider] full exception:", repr(e))
